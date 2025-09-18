@@ -1,0 +1,9 @@
+#!/bin/sh
+'''exec' "/Users/ammararfan/Desktop/Kings College London/KCL_GITHUB/Slidespeak-coding-challenge-2025-Ammar/backend/.venv/bin/python" "$0" "$@"
+' '''
+import sys
+from unoserver.client import converter_main
+if __name__ == '__main__':
+    if sys.argv[0].endswith('.exe'):
+        sys.argv[0] = sys.argv[0][:-4]
+    sys.exit(converter_main())
