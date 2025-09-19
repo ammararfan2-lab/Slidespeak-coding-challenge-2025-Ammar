@@ -7,12 +7,12 @@ from dotenv import load_dotenv
 from .converter import convert_pptx_to_pdf
 
 
-app = FastAPI()
+app = FastAPI(title="pptx -> pdf converter")
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # You can restrict this to your frontend URL
+    allow_origins= ["http://localhost:3000"],#["*"],  # You can restrict this to your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
