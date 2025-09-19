@@ -1,430 +1,1004 @@
 "use client";
-import React, { useState, useRef } from "react";
+
+import { useRef, useState } from "react";
 import { ChooseFileStep } from "@/components/ChooseFileStep";
 import { LoadingIndicatorIcon } from "@/icons/LoadingIndicatorIcon";
 import { PdfIcon } from "@/icons/PdfIcon";
-
-/**
- * Status type representing the different stages of the conversion
- */
-type Status =
-  | "idle"
-  | "selected"
-  | "uploading"
-  | "converting"
-  | "done"
-  | "error";
+import { useConversionStore } from "@/stores/conversionStore";
 
 /**
  * PowerPointToPdfConverter
  *
- * Handles the entire flow:
- * - File selection
- * - Confirming conversion
- * - Fake uploading progress
- * - Conversion spinner
- * - Download link
- * - Error handling
+ * Handles file selection, fake upload progress, conversion spinner,
+ * download link, and error handling.
  */
 export default function PowerPointToPdfConverter() {
-  const [status, setStatus] = useState<Status>("idle"); // Current status
-  const [file, setFile] = useState<File | null>(null); // Selected file
-  const [progress, setProgress] = useState<number>(0); // Upload progress
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null); // Download URL
-  const [errorMessage, setErrorMessage] = useState<string | null>(null); // Error message
-
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  /**
-   * Handles file selection from ChooseFileStep
-   */
-  const handleFileSelect = (selectedFile: File | null) => {
-    if (selectedFile) {
-      setFile(selectedFile);
-      setStatus("selected");
-      setProgress(0);
-      setDownloadUrl(null);
-      setErrorMessage(null);
-    }
-  };
+  // ✅ Track whether user has selected "Convert to PDF"
+  const [convertOptionSelected, setConvertOptionSelected] = useState(false);
 
-  /**
-   * Resets component to initial state
-   */
-  const reset = () => {
-    setFile(null);
-    setStatus("idle");
+  const {
+    status,
+    file,
+    progress,
+    downloadUrl,
+    errorMessage,
+    setStatus,
+    setFile,
+    setProgress,
+    setDownloadUrl,
+    setErrorMessage,
+    reset,
+  } = useConversionStore();
+
+  /** Handle file selection */
+  const handleFileSelect = (selectedFile: File | null) => {
+    if (!selectedFile) return;
+    setFile(selectedFile);
+    setStatus("selected");
     setProgress(0);
     setDownloadUrl(null);
     setErrorMessage(null);
+    setConvertOptionSelected(false); // reset selection when new file chosen
   };
 
-  /**
-   * Uploads the file to backend with **fake smooth progress**
-   * and then shows conversion spinner while waiting for backend
-   */
-  const handleUpload = () => {
+  /** Fake upload progress */
+  const simulateUpload = (): Promise<void> => {
+    return new Promise((resolve) => {
+      setStatus("uploading");
+      let percent = 0;
+      const interval = setInterval(() => {
+        percent += Math.floor(Math.random() * 10) + 5; // Increment randomly
+        if (percent >= 100) {
+          percent = 100;
+          setProgress(percent);
+          clearInterval(interval);
+          resolve(); // upload complete
+        } else {
+          setProgress(percent);
+        }
+      }, 100);
+    });
+  };
+
+  /** Handle conversion process */
+  const handleConvert = async () => {
     if (!file) return;
 
-    setStatus("uploading");
-    setProgress(0);
-    setErrorMessage(null);
+    try {
+      // Step 1: Fake upload
+      await simulateUpload();
 
-    let fakeProgress = 0;
+      // Step 2: Show conversion spinner
+      setStatus("converting");
 
-    // Smooth fake progress interval (0 → 95%)
-    const interval = setInterval(() => {
-      fakeProgress += Math.floor(Math.random() * 10) + 5; // increase 5–15%
-      if (fakeProgress > 95) fakeProgress = 95;
-      setProgress(fakeProgress);
-    }, 200);
+      // First upload
+      const formData = new FormData();
+      formData.append("file", file);
 
-    const formData = new FormData();
-    formData.append("file", file);
+      const uploadRes = await fetch("http://localhost:8000/upload/", {
+        method: "POST",
+        body: formData,
+      });
 
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "http://localhost:8000/convert/");
+      if (!uploadRes.ok) throw new Error("Upload failed");
+      const uploadData = await uploadRes.json();
+      const fileId = uploadData.file_id;
 
-    xhr.onload = () => {
-      clearInterval(interval); // stop fake progress
-      setProgress(100); // full progress
-      if (xhr.status >= 200 && xhr.status < 300) {
-        const contentType = xhr.getResponseHeader("content-type") || "";
-        if (contentType.includes("application/json")) {
-          const data = JSON.parse(xhr.responseText);
-          setDownloadUrl(data.download_url);
-        } else {
-          const blob = new Blob([xhr.response]);
-          const url = URL.createObjectURL(blob);
-          setDownloadUrl(url);
-        }
-        setStatus("done");
-      } else {
-        setErrorMessage("Upload or conversion failed. Please try again.");
-        setStatus("error");
-      }
-    };
+      // Then convert
+      const convertForm = new FormData();
+      convertForm.append("file_id", fileId);
 
-    xhr.onerror = () => {
-      clearInterval(interval);
-      setErrorMessage("Upload failed. Please try again.");
+      const convertRes = await fetch("http://localhost:8000/convert/", {
+        method: "POST",
+        body: convertForm,
+      });
+
+      if (!convertRes.ok) throw new Error("Conversion failed");
+
+      const data = await convertRes.json();
+      if (!data.download_url) throw new Error("No download URL returned");
+      setDownloadUrl(data.download_url);
+
+      setStatus("done");
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err.message || "Something went wrong");
       setStatus("error");
-    };
+    }
+  };
 
-    // Start upload
-    xhr.send(formData);
+  /** Open PDF in new tab + trigger download */
+  const handleDownloadAndOpen = async () => {
+    if (!downloadUrl) return;
+
+    // Fetch the file as blob
+    const response = await fetch(downloadUrl);
+    const blob = await response.blob();
+
+    // Create an object URL
+    const blobUrl = URL.createObjectURL(blob);
+
+    // Open in new tab
+    window.open(blobUrl, "_blank");
+
+    // Trigger download
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = downloadUrl.split("/").pop() || "converted.pdf";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // Cleanup
+    URL.revokeObjectURL(blobUrl);
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-50 px-4">
-      <div className="w-full max-w-md">
-        {/* Step 1: File selection */}
-        {status === "idle" && (
-          <ChooseFileStep onSelect={handleFileSelect} inputRef={fileInputRef} />
-        )}
+    <>
+      {/* Step 1: File selection */}
+      {status === "idle" && (
+        <ChooseFileStep onSelect={handleFileSelect} inputRef={fileInputRef} />
+      )}
 
-        {/* Step 2: File selected, confirm conversion */}
-        {status === "selected" && file && (
-          <div className="bg-white shadow-lg rounded-2xl p-6">
-            <p className="text-lg font-semibold truncate">{file.name}</p>
-            <p className="text-sm text-gray-500 mb-4">
-              {(file.size / 1024 / 1024).toFixed(2)} MB
-            </p>
-            <div className="flex justify-between">
-              <button
-                onClick={reset}
-                className="px-4 py-2 rounded-lg border text-gray-600 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleUpload}
-                className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-              >
-                Convert
-              </button>
-            </div>
-          </div>
-        )}
+      {/* Step 2: File selected */}
+      {status === "selected" && file && (
+        <div className="flex items-center justify-center min-h-screen bg-gray-50 px-4">
+          <div className="w-full max-w-sm">
+            <div className="bg-white shadow-sm rounded-xl p-6 border border-gray-200">
+              <div className="text-center space-y-4">
+                {/* File info box */}
+                <div className="space-y-1 border border-gray-300 rounded-lg shadow-md p-3 bg-white">
+                  <p className="text-base font-medium text-gray-900 truncate">
+                    {file.name}
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    {(file.size / 1024 / 1024).toFixed(2)} MB
+                  </p>
+                </div>
 
-        {/* Step 3: Uploading progress */}
-        {status === "uploading" && file && (
-          <div className="bg-white shadow-lg rounded-2xl p-6 text-center">
-            <p className="text-lg font-semibold">{file.name}</p>
-            <p className="text-sm text-gray-500 mb-4">
-              {(file.size / 1024 / 1024).toFixed(2)} MB
-            </p>
-            <p className="text-sm font-medium mb-2">Uploading: {progress}%</p>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div
-                className="bg-blue-600 h-2 rounded-full transition-all"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-          </div>
-        )}
+                {/* ✅ Convert option (clickable like checkbox) */}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setConvertOptionSelected(!convertOptionSelected)
+                  }
+                  className={`w-full text-left rounded-lg p-3 border transition 
+                    ${
+                      convertOptionSelected
+                        ? "bg-blue-100 border-blue-600"
+                        : "bg-blue-50 border-blue-200"
+                    }`}
+                >
+                  <div className="flex items-center space-x-3">
+                    <div
+                      className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0
+                      ${
+                        convertOptionSelected
+                          ? "border-blue-600"
+                          : "border-gray-300"
+                      }`}
+                    >
+                      {convertOptionSelected && (
+                        <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
+                      )}
+                    </div>
+                    <div className="text-left">
+                      <p className="text-sm font-medium text-blue-900">
+                        Convert to PDF
+                      </p>
+                      <p className="text-xs text-blue-700">
+                        Best quality, retains images and other assets.
+                      </p>
+                    </div>
+                  </div>
+                </button>
 
-        {/* Step 4: Done, show download */}
-        {status === "done" && downloadUrl && (
-          <div className="bg-white shadow-lg rounded-2xl p-6 text-center">
-            <div className="flex justify-center mb-3">
-              <div className="w-12 h-12 text-red-500">
-                <PdfIcon />
+                {/* Buttons */}
+                <div className="flex space-x-3 pt-2">
+                  <button
+                    onClick={reset}
+                    className="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConvert}
+                    disabled={!convertOptionSelected}
+                    className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors
+                      ${
+                        convertOptionSelected
+                          ? "bg-blue-600 text-white hover:bg-blue-700"
+                          : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                      }`}
+                  >
+                    Convert
+                  </button>
+                </div>
               </div>
             </div>
-            <p className="text-lg font-semibold">
-              File converted successfully!
-            </p>
-            <div className="flex justify-between mt-4">
-              <button
-                onClick={reset}
-                className="px-4 py-2 rounded-lg border text-gray-600 hover:bg-gray-50"
-              >
-                Convert another
-              </button>
-              <a
-                href={downloadUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-              >
-                Download file
-              </a>
+          </div>
+        </div>
+      )}
+
+      {/* Step 3: Uploading progress */}
+      {status === "uploading" && file && (
+        <div className="flex items-center justify-center min-h-screen bg-gray-50 px-4">
+          <div className="w-full max-w-sm">
+            <div className="bg-white shadow-sm rounded-xl p-6 border border-gray-200">
+              <div className="text-center space-y-4">
+                <div className="space-y-1 border border-gray-300 rounded-lg shadow-md p-3 bg-white">
+                  <p className="text-base font-medium text-gray-900 truncate">
+                    {file.name}
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    {(file.size / 1024 / 1024).toFixed(2)} MB
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-center space-x-2">
+                    <div className="w-4 h-4 bg-blue-600 rounded-full animate-pulse"></div>
+                    <span className="text-sm font-medium text-gray-900">
+                      Uploading your file
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div
+                      className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                </div>
+
+                <button
+                  onClick={reset}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Step 5: Error */}
-        {status === "error" && errorMessage && (
-          <div className="bg-red-50 border border-red-200 rounded-2xl p-6 text-center">
-            <p className="text-red-600 font-semibold mb-4">{errorMessage}</p>
-            <button
-              onClick={reset}
-              className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700"
-            >
-              Try Again
-            </button>
+      {/* Step 4: Converting */}
+      {status === "converting" && file && (
+        <div className="flex items-center justify-center min-h-screen bg-gray-50 px-4">
+          <div className="w-full max-w-sm">
+            <div className="bg-white shadow-sm rounded-xl p-6 border border-gray-200">
+              <div className="text-center space-y-4">
+                <div className="space-y-1 border border-gray-300 rounded-lg shadow-md p-3 bg-white">
+                  <p className="text-base font-medium text-gray-900 truncate">
+                    {file.name}
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    {(file.size / 1024 / 1024).toFixed(2)} MB
+                  </p>
+                </div>
+
+                <div className="flex flex-col items-center space-y-3">
+                  <div className="w-5 h-5 text-blue-600 animate-spin">
+                    <LoadingIndicatorIcon />
+                  </div>
+                  <span className="text-sm font-medium text-gray-900">
+                    Converting your file
+                  </span>
+                </div>
+
+                <button
+                  onClick={reset}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           </div>
-        )}
-      </div>
-    </div>
+        </div>
+      )}
+
+      {/* Step 5: Done */}
+      {status === "done" && downloadUrl && (
+        <div className="flex items-center justify-center min-h-screen bg-gray-50 px-4">
+          <div className="w-full max-w-sm">
+            <div className="bg-white shadow-sm rounded-xl p-6 border border-gray-200">
+              <div className="text-center space-y-4">
+                <div className="flex justify-center">
+                  <div className="w-full max-w-sm bg-white border border-gray-300 rounded-lg shadow-md p-6 flex flex-col items-center space-y-4">
+                    {/* PDF Icon */}
+                    <div className="w-18 h-18 flex items-center justify-center">
+                      <PdfIcon />
+                    </div>
+
+                    {/* Success text */}
+                    <p className="text-base font-medium text-gray-900 text-center">
+                      File converted successfully!
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex space-x-3 pt-2">
+                  <button
+                    onClick={reset}
+                    className="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+                  >
+                    Convert another
+                  </button>
+                  <button
+                    onClick={handleDownloadAndOpen}
+                    className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+                  >
+                    Download file
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Step 6: Error */}
+      {status === "error" && errorMessage && (
+        <div className="flex items-center justify-center min-h-screen bg-gray-50 px-4">
+          <div className="w-full max-w-sm">
+            <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+              <div className="text-center space-y-4">
+                <p className="text-red-600 font-medium text-sm">
+                  {errorMessage}
+                </p>
+                <button
+                  onClick={reset}
+                  className="w-full px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors"
+                >
+                  Try Again
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
 // "use client";
-// import React, { useState, useRef } from "react";
+
+// import { useRef } from "react";
 // import { ChooseFileStep } from "@/components/ChooseFileStep";
 // import { LoadingIndicatorIcon } from "@/icons/LoadingIndicatorIcon";
 // import { PdfIcon } from "@/icons/PdfIcon";
-
-// /**
-//  * Conversion status types for UX state handling
-//  */
-// type Status =
-//   | "idle"
-//   | "selected"
-//   | "uploading"
-//   | "converting"
-//   | "done"
-//   | "error";
+// import { useConversionStore } from "@/stores/conversionStore";
 
 // /**
 //  * PowerPointToPdfConverter
 //  *
-//  * Handles file upload, conversion flow, and rendering
-//  * different UI states (idle, uploading, converting, done).
+//  * Handles file selection, fake upload progress, conversion spinner,
+//  * download link, and error handling.
 //  */
 // export default function PowerPointToPdfConverter() {
-//   const [status, setStatus] = useState<Status>("idle");
-//   const [file, setFile] = useState<File | null>(null);
-//   const [progress, setProgress] = useState<number>(0);
-//   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-
 //   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-//   /**
-//    * Handle file selection from ChooseFileStep
-//    */
-//   const handleFileSelect = (newFile: File | null) => {
-//     if (newFile) {
-//       setFile(newFile);
-//       setStatus("selected");
-//     }
+//   const {
+//     status,
+//     file,
+//     progress,
+//     downloadUrl,
+//     errorMessage,
+//     setStatus,
+//     setFile,
+//     setProgress,
+//     setDownloadUrl,
+//     setErrorMessage,
+//     reset,
+//   } = useConversionStore();
+
+//   /** Handle file selection */
+//   const handleFileSelect = (selectedFile: File | null) => {
+//     if (!selectedFile) return;
+//     setFile(selectedFile);
+//     setStatus("selected");
+//     setProgress(0);
+//     setDownloadUrl(null);
+//     setErrorMessage(null);
 //   };
 
-//   /**
-//    * Simulates file upload and conversion process
-//    * TODO: Replace with backend API integration
-//    */
-//   //   const handleUpload = async () => {
-//   //     if (!file) return;
-//   //     setStatus("uploading");
+//   /** Fake upload progress */
+//   const simulateUpload = (): Promise<void> => {
+//     return new Promise((resolve) => {
+//       setStatus("uploading");
+//       let percent = 0;
+//       const interval = setInterval(() => {
+//         percent += Math.floor(Math.random() * 10) + 5; // Increment randomly
+//         if (percent >= 100) {
+//           percent = 100;
+//           setProgress(percent);
+//           clearInterval(interval);
+//           resolve(); // upload complete
+//         } else {
+//           setProgress(percent);
+//         }
+//       }, 100);
+//     });
+//   };
 
-//   //     // Simulate upload progress
-//   //     for (let i = 0; i <= 100; i += 10) {
-//   //       setTimeout(() => setProgress(i), i * 20);
-//   //     }
-
-//   //     // Fake conversion flow
-//   //     setTimeout(() => {
-//   //       setStatus("converting");
-//   //       setTimeout(() => {
-//   //         setStatus("done");
-//   //         setDownloadUrl("/dummy.pdf"); // TODO: replace with API response
-//   //       }, 2000);
-//   //     }, 2000);
-//   //   };
-
-//   const handleUpload = async () => {
+//   /** Handle conversion process */
+//   const handleConvert = async () => {
 //     if (!file) return;
 
-//     setStatus("uploading");
-
-//     const formData = new FormData();
-//     formData.append("file", file);
-
 //     try {
-//       setStatus("converting"); // 🔹 Show spinner immediately after starting request
+//       // Step 1: Fake upload
+//       await simulateUpload();
 
-//       const response = await fetch("http://localhost:8000/convert/", {
+//       // Step 2: Show conversion spinner
+//       setStatus("converting");
+
+//       // First upload
+//       const formData = new FormData();
+//       formData.append("file", file);
+
+//       const uploadRes = await fetch("http://localhost:8000/upload/", {
 //         method: "POST",
 //         body: formData,
 //       });
 
-//       if (!response.ok) {
-//         throw new Error("Upload failed");
-//       }
+//       if (!uploadRes.ok) throw new Error("Upload failed");
+//       const uploadData = await uploadRes.json();
+//       const fileId = uploadData.file_id;
 
-//       // If backend returned JSON with S3 link
-//       if (response.headers.get("content-type")?.includes("application/json")) {
-//         const data = await response.json();
-//         setDownloadUrl(data.download_url);
-//       } else {
-//         // If backend returned FileResponse (raw PDF)
-//         const blob = await response.blob();
-//         const url = URL.createObjectURL(blob);
-//         setDownloadUrl(url);
-//       }
+//       // Then convert
+//       const convertForm = new FormData();
+//       convertForm.append("file_id", fileId);
+
+//       const convertRes = await fetch("http://localhost:8000/convert/", {
+//         method: "POST",
+//         body: convertForm,
+//       });
+
+//       if (!convertRes.ok) throw new Error("Conversion failed");
+
+//       const data = await convertRes.json();
+//       if (!data.download_url) throw new Error("No download URL returned");
+//       setDownloadUrl(data.download_url);
 
 //       setStatus("done");
-//     } catch (error) {
-//       console.error(error);
+//     } catch (err: any) {
+//       console.error(err);
+//       setErrorMessage(err.message || "Something went wrong");
 //       setStatus("error");
 //     }
 //   };
 
+//   /** Open PDF in new tab + trigger download */
+//   const handleDownloadAndOpen = async () => {
+//     if (!downloadUrl) return;
+
+//     // Fetch the file as blob
+//     const response = await fetch(downloadUrl);
+//     const blob = await response.blob();
+
+//     // Create an object URL
+//     const blobUrl = URL.createObjectURL(blob);
+
+//     // Open in new tab
+//     window.open(blobUrl, "_blank");
+
+//     // Trigger download
+//     const link = document.createElement("a");
+//     link.href = blobUrl;
+//     link.download = downloadUrl.split("/").pop() || "converted.pdf";
+//     document.body.appendChild(link);
+//     link.click();
+//     document.body.removeChild(link);
+
+//     // Cleanup
+//     URL.revokeObjectURL(blobUrl);
+//   };
+
 //   return (
-//     <div className="flex items-center justify-center min-h-screen bg-gray-50 px-4">
-//       <div className="w-full max-w-md">
-//         {/* Idle: Upload step */}
-//         {status === "idle" && (
-//           <ChooseFileStep onSelect={handleFileSelect} inputRef={fileInputRef} />
-//         )}
+//     <>
+//       {/* Step 1: File selection */}
+//       {status === "idle" && (
+//         <ChooseFileStep onSelect={handleFileSelect} inputRef={fileInputRef} />
+//       )}
 
-//         {/* File selected: Show file card and Convert button */}
-//         {status === "selected" && file && (
-//           <div className="bg-white shadow-lg rounded-2xl p-6">
-//             <p className="text-lg font-semibold truncate">{file.name}</p>
-//             <p className="text-sm text-gray-500 mb-4">
-//               {(file.size / 1024 / 1024).toFixed(2)} MB
-//             </p>
+//       {/* Step 2: File selected */}
+//       {status === "selected" && file && (
+//         <div className="flex items-center justify-center min-h-screen bg-gray-50 px-4">
+//           <div className="w-full max-w-sm">
+//             <div className="bg-white shadow-sm rounded-xl p-6 border border-gray-200">
+//               <div className="text-center space-y-4">
+//                 <div className="space-y-1 border border-gray-300 rounded-lg shadow-md p-3 bg-white">
+//                   <p className="text-base font-medium text-gray-900 truncate">
+//                     {file.name}
+//                   </p>
+//                   <p className="text-sm text-gray-500">
+//                     {(file.size / 1024 / 1024).toFixed(2)} MB
+//                   </p>
+//                 </div>
 
-//             <div className="border rounded-lg p-3 mb-4 bg-gray-50">
-//               <p className="text-sm font-medium">Convert to PDF</p>
-//               <p className="text-xs text-gray-500">
-//                 Best quality, retains images and other assets.
-//               </p>
-//             </div>
+//                 {/* <div className="space-y-1">
+//                   <p className="text-base font-medium text-gray-900 truncate">
+//                     {file.name}
+//                   </p>
+//                   <p className="text-sm text-gray-500">
+//                     {(file.size / 1024 / 1024).toFixed(2)} MB
+//                   </p>
+//                 </div> */}
 
-//             <div className="flex justify-between">
-//               <button
-//                 onClick={() => {
-//                   setFile(null);
-//                   setStatus("idle");
-//                 }}
-//                 className="px-4 py-2 rounded-lg border text-gray-600 hover:bg-gray-50"
-//               >
-//                 Cancel
-//               </button>
-//               <button
-//                 onClick={handleUpload}
-//                 className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-//               >
-//                 Convert
-//               </button>
-//             </div>
-//           </div>
-//         )}
+//                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+//                   <div className="flex items-center space-x-3">
+//                     <div className="w-4 h-4 rounded-full border-2 border-blue-600 flex items-center justify-center flex-shrink-0">
+//                       <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
+//                     </div>
+//                     <div className="text-left">
+//                       <p className="text-sm font-medium text-blue-900">
+//                         Convert to PDF
+//                       </p>
+//                       <p className="text-xs text-blue-700">
+//                         Best quality, retains images and other assets.
+//                       </p>
+//                     </div>
+//                   </div>
+//                 </div>
 
-//         {/* Uploading progress */}
-//         {status === "uploading" && (
-//           <div className="bg-white shadow-lg rounded-2xl p-6">
-//             <p className="text-lg font-semibold">{file?.name}</p>
-//             <p className="text-sm text-gray-500 mb-4">
-//               {(file?.size ?? 0 / 1024 / 1024).toFixed(2)} MB
-//             </p>
-
-//             <p className="text-sm font-medium mb-2">Uploading: {progress}%</p>
-//             <div className="w-full bg-gray-200 rounded-full h-2">
-//               <div
-//                 className="bg-blue-600 h-2 rounded-full transition-all"
-//                 style={{ width: `${progress}%` }}
-//               />
-//             </div>
-//           </div>
-//         )}
-
-//         {/* Converting spinner */}
-//         {status === "converting" && (
-//           <div className="bg-white shadow-lg rounded-2xl p-6 text-center">
-//             <p className="text-lg font-semibold">{file?.name}</p>
-//             <p className="text-sm text-gray-500 mb-4">
-//               {(file?.size ?? 0 / 1024 / 1024).toFixed(2)} MB
-//             </p>
-
-//             <div className="flex items-center justify-center space-x-3">
-//               {/* Wrap spinner to apply styling */}
-//               <div className="w-6 h-6 text-blue-600 animate-spin">
-//                 <LoadingIndicatorIcon />
-//               </div>
-//               <span className="text-sm">Converting your file</span>
-//             </div>
-//           </div>
-//         )}
-
-//         {/* Done: Show download link */}
-//         {status === "done" && downloadUrl && (
-//           <div className="bg-white shadow-lg rounded-2xl p-6 text-center">
-//             <div className="flex justify-center mb-3">
-//               <div className="w-12 h-12 text-red-500">
-//                 <PdfIcon />
+//                 <div className="flex space-x-3 pt-2">
+//                   <button
+//                     onClick={reset}
+//                     className="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+//                   >
+//                     Cancel
+//                   </button>
+//                   <button
+//                     onClick={handleConvert}
+//                     className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+//                   >
+//                     Convert
+//                   </button>
+//                 </div>
 //               </div>
 //             </div>
-//             <p className="text-lg font-semibold">
-//               File converted successfully!
-//             </p>
+//           </div>
+//         </div>
+//       )}
 
-//             <div className="flex justify-between mt-4">
-//               <button
-//                 onClick={() => {
-//                   setFile(null);
-//                   setStatus("idle");
-//                 }}
-//                 className="px-4 py-2 rounded-lg border text-gray-600 hover:bg-gray-50"
-//               >
-//                 Convert another
-//               </button>
-//               <a
-//                 href={downloadUrl}
-//                 download
-//                 className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-//               >
-//                 Download file
-//               </a>
+//       {/* Step 3: Uploading progress */}
+//       {status === "uploading" && file && (
+//         <div className="flex items-center justify-center min-h-screen bg-gray-50 px-4">
+//           <div className="w-full max-w-sm">
+//             <div className="bg-white shadow-sm rounded-xl p-6 border border-gray-200">
+//               <div className="text-center space-y-4">
+//                 <div className="space-y-1 border border-gray-300 rounded-lg shadow-md p-3 bg-white">
+//                   <p className="text-base font-medium text-gray-900 truncate">
+//                     {file.name}
+//                   </p>
+//                   <p className="text-sm text-gray-500">
+//                     {(file.size / 1024 / 1024).toFixed(2)} MB
+//                   </p>
+//                 </div>
+
+//                 {/* <div className="space-y-1">
+//                   <p className="text-base font-medium text-gray-900 truncate">
+//                     {file.name}
+//                   </p>
+//                   <p className="text-sm text-gray-500">
+//                     {(file.size / 1024 / 1024).toFixed(2)} MB
+//                   </p>
+//                 </div> */}
+
+//                 <div className="space-y-3">
+//                   <div className="flex items-center justify-center space-x-2">
+//                     <div className="w-4 h-4 bg-blue-600 rounded-full animate-pulse"></div>
+//                     <span className="text-sm font-medium text-gray-900">
+//                       Uploading your file
+//                     </span>
+//                   </div>
+//                   <div className="w-full bg-gray-200 rounded-full h-2">
+//                     <div
+//                       className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+//                       style={{ width: `${progress}%` }}
+//                     />
+//                   </div>
+//                 </div>
+
+//                 <button
+//                   onClick={reset}
+//                   className="w-full px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+//                 >
+//                   Cancel
+//                 </button>
+//               </div>
 //             </div>
 //           </div>
-//         )}
-//       </div>
-//     </div>
+//         </div>
+//       )}
+
+//       {/* Step 4: Converting */}
+//       {status === "converting" && file && (
+//         <div className="flex items-center justify-center min-h-screen bg-gray-50 px-4">
+//           <div className="w-full max-w-sm">
+//             <div className="bg-white shadow-sm rounded-xl p-6 border border-gray-200">
+//               <div className="text-center space-y-4">
+//                 <div className="space-y-1 border border-gray-300 rounded-lg shadow-md p-3 bg-white">
+//                   <p className="text-base font-medium text-gray-900 truncate">
+//                     {file.name}
+//                   </p>
+//                   <p className="text-sm text-gray-500">
+//                     {(file.size / 1024 / 1024).toFixed(2)} MB
+//                   </p>
+//                 </div>
+
+//                 {/* <div className="space-y-1">
+//                   <p className="text-base font-medium text-gray-900 truncate">
+//                     {file.name}
+//                   </p>
+//                   <p className="text-sm text-gray-500">
+//                     {(file.size / 1024 / 1024).toFixed(2)} MB
+//                   </p>
+//                 </div> */}
+
+//                 <div className="flex flex-col items-center space-y-3">
+//                   <div className="w-5 h-5 text-blue-600 animate-spin">
+//                     <LoadingIndicatorIcon />
+//                   </div>
+//                   <span className="text-sm font-medium text-gray-900">
+//                     Converting your file
+//                   </span>
+//                 </div>
+
+//                 <button
+//                   onClick={reset}
+//                   className="w-full px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+//                 >
+//                   Cancel
+//                 </button>
+//               </div>
+//             </div>
+//           </div>
+//         </div>
+//       )}
+
+//       {/* Step 5: Done */}
+//       {status === "done" && downloadUrl && (
+//         <div className="flex items-center justify-center min-h-screen bg-gray-50 px-4">
+//           <div className="w-full max-w-sm">
+//             <div className="bg-white shadow-sm rounded-xl p-6 border border-gray-200">
+//               <div className="text-center space-y-4">
+//                 <div className="flex justify-center">
+//                   <div className="w-full max-w-sm bg-white border border-gray-300 rounded-lg shadow-md p-6 flex flex-col items-center space-y-4">
+//                     {/* PDF Icon */}
+//                     <div className="w-18 h-18 flex items-center justify-center">
+//                       <PdfIcon />
+//                     </div>
+
+//                     {/* Success text */}
+//                     <p className="text-base font-medium text-gray-900 text-center">
+//                       File converted successfully!
+//                     </p>
+//                   </div>
+//                 </div>
+
+//                 {/* <div className="flex justify-center">
+//                   <div className="w-18 h-18">
+//                     <PdfIcon />
+//                   </div>
+//                 </div>
+
+//                 <p className="text-base font-medium text-gray-900">
+//                   File converted successfully!
+//                 </p> */}
+
+//                 <div className="flex space-x-3 pt-2">
+//                   <button
+//                     onClick={reset}
+//                     className="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+//                   >
+//                     Convert another
+//                   </button>
+//                   <button
+//                     onClick={handleDownloadAndOpen}
+//                     className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+//                   >
+//                     Download file
+//                   </button>
+//                 </div>
+//               </div>
+//             </div>
+//           </div>
+//         </div>
+//       )}
+
+//       {/* Step 6: Error */}
+//       {status === "error" && errorMessage && (
+//         <div className="flex items-center justify-center min-h-screen bg-gray-50 px-4">
+//           <div className="w-full max-w-sm">
+//             <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+//               <div className="text-center space-y-4">
+//                 <p className="text-red-600 font-medium text-sm">
+//                   {errorMessage}
+//                 </p>
+//                 <button
+//                   onClick={reset}
+//                   className="w-full px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors"
+//                 >
+//                   Try Again
+//                 </button>
+//               </div>
+//             </div>
+//           </div>
+//         </div>
+//       )}
+//     </>
+//   );
+// }
+
+// "use client";
+
+// import React, { useRef } from "react";
+// import { ChooseFileStep } from "@/components/ChooseFileStep";
+// import { LoadingIndicatorIcon } from "@/icons/LoadingIndicatorIcon";
+// import { PdfIcon } from "@/icons/PdfIcon";
+// import { useConversionStore } from "@/stores/conversionStore";
+
+// /**
+//  * PowerPointToPdfConverter
+//  *
+//  * Handles file selection, fake upload progress, conversion spinner,
+//  * download link, and error handling.
+//  */
+// export default function PowerPointToPdfConverter() {
+//   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+//   const {
+//     status,
+//     file,
+//     progress,
+//     downloadUrl,
+//     errorMessage,
+//     setStatus,
+//     setFile,
+//     setProgress,
+//     setDownloadUrl,
+//     setErrorMessage,
+//     reset,
+//   } = useConversionStore();
+
+//   /** Handle file selection */
+//   const handleFileSelect = (selectedFile: File | null) => {
+//     if (!selectedFile) return;
+//     setFile(selectedFile);
+//     setStatus("selected");
+//     setProgress(0);
+//     setDownloadUrl(null);
+//     setErrorMessage(null);
+//   };
+
+//   /** Fake upload progress */
+//   const simulateUpload = (): Promise<void> => {
+//     return new Promise((resolve) => {
+//       setStatus("uploading");
+//       let percent = 0;
+//       const interval = setInterval(() => {
+//         percent += Math.floor(Math.random() * 10) + 5; // Increment randomly
+//         if (percent >= 100) {
+//           percent = 100;
+//           setProgress(percent);
+//           clearInterval(interval);
+//           resolve(); // upload complete
+//         } else {
+//           setProgress(percent);
+//         }
+//       }, 100);
+//     });
+//   };
+
+//   /** Handle conversion process */
+//   const handleConvert = async () => {
+//     if (!file) return;
+
+//     try {
+//       // Step 1: Fake upload
+//       await simulateUpload();
+
+//       // Step 2: Show conversion spinner
+//       setStatus("converting");
+
+//       // First upload
+//       const formData = new FormData();
+//       formData.append("file", file);
+
+//       const uploadRes = await fetch("http://localhost:8000/upload/", {
+//         method: "POST",
+//         body: formData,
+//       });
+
+//       if (!uploadRes.ok) throw new Error("Upload failed");
+//       const uploadData = await uploadRes.json();
+//       const fileId = uploadData.file_id;
+
+//       // Then convert
+//       const convertForm = new FormData();
+//       convertForm.append("file_id", fileId);
+
+//       const convertRes = await fetch("http://localhost:8000/convert/", {
+//         method: "POST",
+//         body: convertForm,
+//       });
+
+//       if (!convertRes.ok) throw new Error("Conversion failed");
+
+//       const data = await convertRes.json();
+//       if (!data.download_url) throw new Error("No download URL returned");
+//       setDownloadUrl(data.download_url);
+
+//       setStatus("done");
+//     } catch (err: any) {
+//       console.error(err);
+//       setErrorMessage(err.message || "Something went wrong");
+//       setStatus("error");
+//     }
+//   };
+
+//   /** Open PDF in new tab + trigger download */
+//   const handleDownloadAndOpen = async () => {
+//     if (!downloadUrl) return;
+
+//     // Fetch the file as blob
+//     const response = await fetch(downloadUrl);
+//     const blob = await response.blob();
+
+//     // Create an object URL
+//     const blobUrl = URL.createObjectURL(blob);
+
+//     // Open in new tab
+//     window.open(blobUrl, "_blank");
+
+//     // Trigger download
+//     const link = document.createElement("a");
+//     link.href = blobUrl;
+//     link.download = downloadUrl.split("/").pop() || "converted.pdf";
+//     document.body.appendChild(link);
+//     link.click();
+//     document.body.removeChild(link);
+
+//     // Cleanup
+//     URL.revokeObjectURL(blobUrl);
+//   };
+
+//   return (
+//     <>
+//       {/* Step 1: File selection */}
+//       {status === "idle" && (
+//         <ChooseFileStep onSelect={handleFileSelect} inputRef={fileInputRef} />
+//       )}
+
+//       {/* Step 2: File selected */}
+//       {status === "selected" && file && (
+//         <div className="bg-white shadow-lg rounded-2xl p-6">
+//           <p className="text-lg font-semibold truncate">{file.name}</p>
+//           <p className="text-sm text-gray-500 mb-4">
+//             {(file.size / 1024 / 1024).toFixed(2)} MB
+//           </p>
+//           <div className="flex justify-between">
+//             <button
+//               onClick={reset}
+//               className="px-4 py-2 rounded-lg border text-gray-600 hover:bg-gray-50"
+//             >
+//               Cancel
+//             </button>
+//             <button
+//               onClick={handleConvert}
+//               className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+//             >
+//               Convert
+//             </button>
+//           </div>
+//         </div>
+//       )}
+
+//       {/* Step 3: Uploading progress */}
+//       {status === "uploading" && file && (
+//         <div className="bg-white shadow-lg rounded-2xl p-6 text-center">
+//           <p className="text-lg font-semibold">{file.name}</p>
+//           <p className="text-sm text-gray-500 mb-4">
+//             {(file.size / 1024 / 1024).toFixed(2)} MB
+//           </p>
+//           <p className="text-sm font-medium mb-2">Uploading: {progress}%</p>
+//           <div className="w-full bg-gray-200 rounded-full h-2">
+//             <div
+//               className="bg-blue-600 h-2 rounded-full transition-all"
+//               style={{ width: `${progress}%` }}
+//             />
+//           </div>
+//         </div>
+//       )}
+
+//       {/* Step 4: Converting */}
+//       {status === "converting" && file && (
+//         <div className="bg-white shadow-lg rounded-2xl p-6 text-center">
+//           <p className="text-lg font-semibold">{file.name}</p>
+//           <p className="text-sm text-gray-500 mb-4">
+//             {(file.size / 1024 / 1024).toFixed(2)} MB
+//           </p>
+//           <div className="flex flex-col items-center space-y-3">
+//             <div className="w-8 h-8 text-blue-600 animate-spin">
+//               <LoadingIndicatorIcon />
+//             </div>
+//             <span className="text-sm">Converting your file...</span>
+//           </div>
+//         </div>
+//       )}
+
+//       {/* Step 5: Done */}
+//       {status === "done" && downloadUrl && (
+//         <div className="bg-white shadow-lg rounded-2xl p-6 text-center">
+//           <div className="flex justify-center mb-3">
+//             <div className="w-12 h-12 text-red-500">
+//               <PdfIcon />
+//             </div>
+//           </div>
+//           <p className="text-lg font-semibold">File converted successfully!</p>
+//           <div className="flex justify-between mt-4">
+//             <button
+//               onClick={reset}
+//               className="px-4 py-2 rounded-lg border text-gray-600 hover:bg-gray-50"
+//             >
+//               Convert another
+//             </button>
+//             {/* <button
+//                 onClick={async () => {
+//                 if (!downloadUrl) return;
+
+//                 // Fetch the file as blob
+//                 const response = await fetch(downloadUrl);
+//                 const blob = await response.blob();
+
+//                 // Create an object URL
+//                 const blobUrl = URL.createObjectURL(blob);
+
+//                 // Open in new tab
+//                 window.open(blobUrl, "_blank");
+
+//                 // Trigger download
+//                 const link = document.createElement("a");
+//                 link.href = blobUrl;
+//                 link.download =
+//                     downloadUrl.split("/").pop() || "converted.pdf";
+//                 document.body.appendChild(link);
+//                 link.click();
+//                 document.body.removeChild(link);
+
+//                 // Cleanup
+//                 URL.revokeObjectURL(blobUrl);
+//                 }}
+//                 className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+//             >
+//                 Open & Download
+//             </button> */}
+//             <button
+//               onClick={handleDownloadAndOpen}
+//               className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+//             >
+//               Download
+//             </button>
+//           </div>
+//         </div>
+//       )}
+
+//       {/* Step 6: Error */}
+//       {status === "error" && errorMessage && (
+//         <div className="bg-red-50 border border-red-200 rounded-2xl p-6 text-center">
+//           <p className="text-red-600 font-semibold mb-4">{errorMessage}</p>
+//           <button
+//             onClick={reset}
+//             className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700"
+//           >
+//             Try Again
+//           </button>
+//         </div>
+//       )}
+//     </>
 //   );
 // }
