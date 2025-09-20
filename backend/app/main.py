@@ -108,50 +108,5 @@ async def convert_file(request: Request, file_id: str = Form(...)):
         raise HTTPException(
             status_code=500, detail=f"Conversion failed: {str(e)}")
 
-
-# @app.post("/convert/")
-# async def convert_file(request: Request, file: UploadFile = File(...)):
-    """
-    Uploads a PowerPoint (.pptx) file, converts it to PDF,
-    optionally uploads it to S3, and returns a JSON with the absolute download URL.
-    """
-    # ✅ Validate file type
-    if not file.filename.endswith(".pptx"):
-        raise HTTPException(
-            status_code=400, detail="Only .pptx files are supported"
-        )
-
-    unique_name = f"{uuid.uuid4()}_{file.filename}"
-    input_path = os.path.join(UPLOAD_DIR, unique_name)
-
-    try:
-        # Save uploaded file
-        with open(input_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        # Convert PPTX to PDF
-        pdf_path = convert_pptx_to_pdf(input_path, OUTPUT_DIR)
-
-        # Upload to S3 if credentials exist
-        if all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_BUCKET, AWS_REGION]):
-            download_url = upload_to_s3(pdf_path)
-            return {"download_url": download_url}
-
-        # Fallback: serve locally
-        host = str(request.base_url).rstrip(
-            "/")  # e.g. "http://localhost:8000"
-        file_name = os.path.basename(pdf_path)
-        download_url = f"{host}/local-files/{file_name}"
-        print(download_url)
-        return {"download_url": download_url}
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Conversion failed: {str(e)}")
-
-    finally:
-        if os.path.exists(input_path):
-            os.remove(input_path)
-
 # --- Static files ---
 app.mount("/local-files", StaticFiles(directory=OUTPUT_DIR), name="local-files")

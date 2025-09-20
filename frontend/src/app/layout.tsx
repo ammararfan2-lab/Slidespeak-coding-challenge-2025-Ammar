@@ -8,6 +8,9 @@ export const metadata = {
 
 const RootLayout = async ({ children }: { children: React.ReactNode }) => (
   <html lang="en">
+    <head>
+      <link rel="icon" href="icon.ico" />
+    </head>
     <body>{children}</body>
   </html>
 );
