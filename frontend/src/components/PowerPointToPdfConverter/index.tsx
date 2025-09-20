@@ -79,6 +79,8 @@ export default function PowerPointToPdfConverter() {
 
       const uploadRes = await fetch(
         "https://slidespeak-coding-challenge-2025-ammar-qlww.onrender.com/upload/",
+        // "http://localhost:8000/upload/",
+
         {
           method: "POST",
           body: formData,
@@ -95,6 +97,8 @@ export default function PowerPointToPdfConverter() {
 
       const convertRes = await fetch(
         "https://slidespeak-coding-challenge-2025-ammar-qlww.onrender.com/convert/",
+        // "http://localhost:8000/convert/",
+
         {
           method: "POST",
           body: convertForm,
