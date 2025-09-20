@@ -18,7 +18,7 @@ app.add_middleware(
     CORSMiddleware,
     # tighten for production
     allow_origins=["http://localhost:3000",
-                   "https://slidespeak-coding-challenge-2025-ammar-1.onrender.com"],
+                   "https://slidespeak-coding-challenge-2025-ammar-1-s4hg.onrender.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
