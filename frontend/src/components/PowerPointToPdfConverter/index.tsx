@@ -77,10 +77,13 @@ export default function PowerPointToPdfConverter() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const uploadRes = await fetch("http://localhost:8000/upload/", {
-        method: "POST",
-        body: formData,
-      });
+      const uploadRes = await fetch(
+        "https://slidespeak-coding-challenge-2025-ammar.onrender.com/upload/",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
 
       if (!uploadRes.ok) throw new Error("Upload failed");
       const uploadData = await uploadRes.json();
@@ -90,10 +93,13 @@ export default function PowerPointToPdfConverter() {
       const convertForm = new FormData();
       convertForm.append("file_id", fileId);
 
-      const convertRes = await fetch("http://localhost:8000/convert/", {
-        method: "POST",
-        body: convertForm,
-      });
+      const convertRes = await fetch(
+        "https://slidespeak-coding-challenge-2025-ammar.onrender.com/convert/",
+        {
+          method: "POST",
+          body: convertForm,
+        }
+      );
 
       if (!convertRes.ok) throw new Error("Conversion failed");
 

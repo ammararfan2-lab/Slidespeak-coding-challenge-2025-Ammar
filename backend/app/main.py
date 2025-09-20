@@ -16,7 +16,9 @@ app = FastAPI(title="pptx -> pdf converter")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # tighten for production
+    # tighten for production
+    allow_origins=["http://localhost:3000",
+                   "https://slidespeak-coding-challenge-2025-ammar-1.onrender.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
